@@ -1,0 +1,13 @@
+{
+  "name": "operatorclientpwa-playwright",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report",
+    "test:functional": "playwright test",
+    "test:l1": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "eventAction": "escalate",
+  "terminate": {
+    "parentAndStandaloneButton": "False Activity",
+    "siteGroupChildButton": "Camera Disconnect"
+  },
+  "escalate": {
+    "parentAndStandaloneButton": "Suspicious Activity",
+    "siteGroupChildButton": "Suspicious Activity"
+  }
+}
