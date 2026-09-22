@@ -11,27 +11,53 @@ npx playwright install chromium
 npm run report
 ```
 
-`run-l1.ps1` loads the ignored `credentials.local.json` file when present and otherwise prompts for the username and hidden password. The suite runs headed, maximized Chromium with tracing enabled and records every run at 1920×1080. It produces HTML and JUnit reports without a named Playwright project badge.
+Set the URL and true/false execution options in the ignored `execution.config.json`. Login values are optional in the file: leave any of them empty so `run-l1.ps1` asks for the username, mandatory mobile number, and hidden password in the terminal. The suite runs headed and maximized.
 
 The workflow logs in, accepts instructions when shown, waits five seconds for queue population, processes grouped and standalone events, applies the configured action to Site Group children using the live drawer count, acts on the parent, and continues scanning. Missing event choices are reported immediately so they do not add a 15-second delay to every action.
 
 ## Event action configuration
 
-`execution.config.json` controls the action for the entire run. Set `eventAction` to `terminate` or `escalate`. The matching section supplies the button title for standalone/parent events and Site Group children.
+`execution.config.json` controls the URL, event action, resilience, and report generation for the entire run. Set `eventAction` to `terminate`, `escalate`, or `rule-based`. Rule-based mode logs Event Type, escalates configured Event Tag matches, and terminates everything else. The file remains local and is ignored by Git because it may contain credentials.
 
 ```json
 {
-  "eventAction": "terminate",
+  "url": "https://uat1-oc.iviscloud.net/",
+  "credentials": {
+    "username": "",
+    "mobileNumber": "",
+    "password": ""
+  },
+  "eventAction": "escalate",
   "terminate": {
     "parentAndStandaloneButton": "False Activity",
     "siteGroupChildButton": "Camera Disconnect"
   },
   "escalate": {
     "parentAndStandaloneButton": "Suspicious Activity",
-    "siteGroupChildButton": "Suspicious Activity"
+    "siteGroupChildButton": "Suspicious Activity",
+    "childNotes": "Escalated by the automated L1 workflow."
+  },
+  "resilience": {
+    "autoHealElements": true,
+    "autoAddNewEvents": true,
+    "recoverUserInterference": true
+  },
+  "reports": {
+    "html": true,
+    "junit": true,
+    "trace": true,
+    "screenshot": true,
+    "video": true,
+    "siteInfoScreenshots": true,
+    "liveViewScreenshots": true,
+    "fullRunVideo": true
   }
 }
 ```
+
+For Site Group child escalation, the test selects the configured pink reason, fills the configured notes textarea, and clicks the final `Escalate` button. Auto-healing adds title, ARIA-label, visible-text, and media-control fallbacks. Auto-add keeps scanning all eight cards for events that arrive during execution. User-interference recovery captures unexpected dialogs or menus in the report and closes them safely before queue processing continues.
+
+The healing manager classifies timeouts, missing or detached elements, blocking overlays, missing popups, network failures, and closed pages. Safe non-destructive actions receive at most two attempts. Destructive terminate/escalate actions retain their toast, drawer-count, and original-button safeguards. When healing cannot recover, the report receives a screenshot and sanitized `healing-request-*.json` containing the error category, current URL without query parameters, visible page text, suggested recovery, and Playwright MCP handoff details. The automation never commits or pushes a generated repair.
 
 Every Live View click waits two seconds for camera loading, captures a full-page screenshot of the Live View window, and attaches it to the Playwright report under `Live View - Unit ID <unitId>`.
 
@@ -50,4 +76,4 @@ Generated artifacts:
 - Trace: `test-results/**/trace.zip`
 - Full automation video: `test-results/**/*.webm`
 
-The functional workflow acts on real UAT events. The delivered default is `terminate` with `False Activity` for direct/parent events and `Camera Disconnect` for Site Group children.
+The functional workflow acts on real UAT events. Review `eventAction` before every run.
