@@ -3,3 +3,4 @@ test-results/
 playwright-report/
 reports/
 credentials.local.json
+execution.config.json
