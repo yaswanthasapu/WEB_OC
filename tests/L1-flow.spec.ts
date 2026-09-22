@@ -3,8 +3,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Page object for authentication. Credentials come from environment variables or
-// execution.config.json or the command prompt; they are never stored in the test.
+// Page object for authentication. Credentials come from environment variables or execution.config.json or the command prompt; they are never stored in the test.
 class LoginPage {
   constructor(page) {
     this.page = page;
