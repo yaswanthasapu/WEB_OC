@@ -50,6 +50,25 @@ try {
   $env:BASE_URL = $resolvedUrl
   & npm.cmd run test:l1
   $testExitCode = $LASTEXITCODE
+  $junitPath = Join-Path $PSScriptRoot 'reports\junit.xml'
+  if ($executionConfig.reports.junit -ne $false -and
+      $executionConfig.reports.junitStdout -eq $false -and
+      (Test-Path -LiteralPath $junitPath)) {
+    [xml]$junitReport = Get-Content -Raw -LiteralPath $junitPath
+    @($junitReport.SelectNodes('//system-out')) | ForEach-Object {
+      [void]$_.ParentNode.RemoveChild($_)
+    }
+    $xmlSettings = [System.Xml.XmlWriterSettings]::new()
+    $xmlSettings.Indent = $true
+    $xmlSettings.Encoding = [System.Text.UTF8Encoding]::new($false)
+    $xmlWriter = [System.Xml.XmlWriter]::Create($junitPath, $xmlSettings)
+    try {
+      $junitReport.Save($xmlWriter)
+    } finally {
+      $xmlWriter.Dispose()
+    }
+    Write-Output '[L1] JUnit stdout removed; HTML playback diagnostics remain available.'
+  }
 } finally {
   if ($pointer) {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
