@@ -369,7 +369,7 @@ class PlaybackNetworkMonitor {
     }))).catch(() => []);
   }
 
-  async attachEventReport(scope, label, metadata, startedAt, endedAt) {
+  async buildEventReport(scope, label, metadata, startedAt, endedAt) {
     const responses = this.responses.filter(({ timestamp }) => timestamp >= startedAt && timestamp <= endedAt);
     const failures = this.failures.filter(({ timestamp }) => timestamp >= startedAt && timestamp <= endedAt);
     const webSockets = this.webSockets.filter((socket) => (
@@ -402,11 +402,7 @@ class PlaybackNetworkMonitor {
       },
       note: 'Technology is inferred from browser-visible requests, response content types, video state, and WebSocket activity. Query strings and credentials are removed.',
     };
-    await test.info().attach(`Playback Network - ${label}`, {
-      body: Buffer.from(JSON.stringify(report, null, 2)),
-      contentType: 'application/json',
-    });
-    console.log(`[L1] Playback network report attached for ${label}: ${[...technologies].join(', ') || 'no browser-visible media transport identified'}.`);
+    console.log(`[L1] Playback network diagnostics captured for ${label}: ${[...technologies].join(', ') || 'no browser-visible media transport identified'}.`);
     return report;
   }
 }
@@ -584,6 +580,7 @@ class SiteGroupingPage {
     this.drawer = null;
     this.childCount = 0;
     this.lastEventMetadata = null;
+    this.pendingPlaybackNetworkReport = null;
   }
 
   actionButton(scope, tag) {
@@ -737,6 +734,7 @@ class SiteGroupingPage {
     this.parentCard = card;
     const failures = [];
     this.lastEventMetadata = null;
+    this.pendingPlaybackNetworkReport = null;
     try {
       try {
         this.lastEventMetadata = await this.healer.run(
@@ -818,7 +816,7 @@ class SiteGroupingPage {
     console.log(`[L1] Play clicked and Pause state confirmed for ${label}.`);
     if (attachPlaybackNetwork && this.reporting.attachPlaybackNetworkDiagnostics && this.playbackMonitor) {
       await this.page.waitForTimeout(1200);
-      await this.playbackMonitor.attachEventReport(
+      this.pendingPlaybackNetworkReport = await this.playbackMonitor.buildEventReport(
         this.parentCard,
         label,
         metadata,
@@ -1191,6 +1189,22 @@ class SiteGroupingPage {
     const firstCamera = cameras[0];
     const cameraLabel = `${firstCamera.name} - ${firstCamera.cameraId}`;
     await expect(popup.getByText(cameraLabel, { exact: true })).toBeVisible({ timeout: 30000 });
+    if (this.pendingPlaybackNetworkReport) {
+      this.pendingPlaybackNetworkReport.event.unitId = unitId;
+      this.pendingPlaybackNetworkReport.event.cameraName = firstCamera.name || null;
+      this.pendingPlaybackNetworkReport.event.cameraId = firstCamera.cameraId || null;
+      const playbackNetworkPath = test.info().outputPath(`playback-network-unit-${safeUnitId}-${Date.now()}.json`);
+      fs.writeFileSync(
+        playbackNetworkPath,
+        JSON.stringify(this.pendingPlaybackNetworkReport, null, 2),
+      );
+      await test.info().attach(`Unit ID ${unitId} - Playback Network Diagnostics`, {
+        path: playbackNetworkPath,
+        contentType: 'application/json',
+      });
+      console.log(`[L1] Playback network diagnostics attached alongside event screenshots for Unit ID ${unitId}: ${path.basename(playbackNetworkPath)}.`);
+      this.pendingPlaybackNetworkReport = null;
+    }
     console.log(`[L1] Live View camera confirmed for ${label}: ${cameraLabel}.`);
     await popup.close();
   }
