@@ -3,8 +3,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Page object for authentication. Credentials come from environment variables or
-// execution.config.json or the command prompt; they are never stored in the test.
+// Page object for authentication. Credentials come from environment variables or execution.config.json or the command prompt; they are never stored in the test.
 class LoginPage {
   constructor(page) {
     this.page = page;
@@ -230,6 +229,188 @@ class EventMetadataTracker {
   }
 }
 
+class PlaybackNetworkMonitor {
+  constructor(page) {
+    this.page = page;
+    this.responses = [];
+    this.failures = [];
+    this.webSockets = [];
+    page.on('response', (response) => this.recordResponse(response));
+    page.on('requestfailed', (request) => this.recordFailure(request));
+    page.on('websocket', (socket) => this.recordWebSocket(socket));
+  }
+
+  sanitizedUrl(rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      parsed.username = '';
+      parsed.password = '';
+      parsed.search = '';
+      parsed.hash = '';
+      parsed.pathname = parsed.pathname.split('/').map((segment) => (
+        segment.length > 48 ? '[redacted]' : segment
+      )).join('/');
+      return parsed.toString();
+    } catch {
+      return '[unavailable]';
+    }
+  }
+
+  serverFromUrl(rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      return {
+        protocol: parsed.protocol.replace(':', ''),
+        hostname: parsed.hostname,
+        port: parsed.port || null,
+      };
+    } catch {
+      return { protocol: null, hostname: null, port: null };
+    }
+  }
+
+  classify(url, contentType = '') {
+    const value = `${url} ${contentType}`.toLowerCase();
+    if (/\.m3u8\b|mpegurl/.test(value)) return 'HLS';
+    if (/\.mpd\b|dash\+xml/.test(value)) return 'MPEG-DASH';
+    if (/\.flv\b|video\/x-flv/.test(value)) return 'FLV';
+    if (/\.m4s\b/.test(value)) return 'Fragmented MP4';
+    if (/\.mp4\b|video\/mp4/.test(value)) return 'MP4';
+    if (/\.ts\b|video\/mp2t|mpeg-ts/.test(value)) return 'MPEG-TS';
+    if (/video\/webm|\.webm\b/.test(value)) return 'WebM';
+    if (/^wss?:/.test(url)) return 'WebSocket';
+    if (/video|stream|playback|recording|footage|clip|media/.test(value)) return 'Media API';
+    return null;
+  }
+
+  isMediaResponse(response) {
+    const headers = response.headers();
+    const contentType = headers['content-type'] || '';
+    const request = response.request();
+    return request.resourceType() === 'media'
+      || Boolean(this.classify(response.url(), contentType))
+      || /video|audio|octet-stream|mpegurl|dash/.test(contentType.toLowerCase());
+  }
+
+  recordResponse(response) {
+    if (!this.isMediaResponse(response)) return;
+    const headers = response.headers();
+    const contentType = headers['content-type'] || '';
+    this.responses.push({
+      timestamp: Date.now(),
+      url: this.sanitizedUrl(response.url()),
+      server: this.serverFromUrl(response.url()),
+      method: response.request().method(),
+      resourceType: response.request().resourceType(),
+      status: response.status(),
+      contentType,
+      technology: this.classify(response.url(), contentType) || 'Unclassified media',
+      responseHeaders: {
+        server: headers.server || null,
+        via: headers.via || null,
+        poweredBy: headers['x-powered-by'] || null,
+        cache: headers['x-cache'] || headers['cf-cache-status'] || null,
+        contentLength: headers['content-length'] || null,
+        acceptRanges: headers['accept-ranges'] || null,
+      },
+    });
+    if (this.responses.length > 5000) this.responses.shift();
+  }
+
+  recordFailure(request) {
+    const technology = this.classify(request.url(), '');
+    if (request.resourceType() !== 'media' && !technology) return;
+    this.failures.push({
+      timestamp: Date.now(),
+      url: this.sanitizedUrl(request.url()),
+      server: this.serverFromUrl(request.url()),
+      method: request.method(),
+      resourceType: request.resourceType(),
+      technology: technology || 'Unclassified media',
+      error: request.failure()?.errorText || 'Request failed',
+    });
+    if (this.failures.length > 1000) this.failures.shift();
+  }
+
+  recordWebSocket(socket) {
+    const record = {
+      createdAt: Date.now(),
+      url: this.sanitizedUrl(socket.url()),
+      server: this.serverFromUrl(socket.url()),
+      sentFrames: 0,
+      receivedFrames: 0,
+      lastActivityAt: Date.now(),
+      closedAt: null,
+      error: null,
+    };
+    socket.on('framesent', () => {
+      record.sentFrames += 1;
+      record.lastActivityAt = Date.now();
+    });
+    socket.on('framereceived', () => {
+      record.receivedFrames += 1;
+      record.lastActivityAt = Date.now();
+    });
+    socket.on('close', () => { record.closedAt = Date.now(); });
+    socket.on('socketerror', (error) => { record.error = String(error); });
+    this.webSockets.push(record);
+  }
+
+  async videoElementState(scope) {
+    return scope.locator('video').evaluateAll((videos) => videos.map((video) => ({
+      currentSrc: video.currentSrc ? video.currentSrc.split('?')[0] : '',
+      sourceType: video.srcObject instanceof MediaStream ? 'MediaStream' : (video.currentSrc?.startsWith('blob:') ? 'MediaSource/blob' : 'URL'),
+      readyState: video.readyState,
+      networkState: video.networkState,
+      paused: video.paused,
+      muted: video.muted,
+      width: video.videoWidth,
+      height: video.videoHeight,
+    }))).catch(() => []);
+  }
+
+  async attachEventReport(scope, label, metadata, startedAt, endedAt) {
+    const responses = this.responses.filter(({ timestamp }) => timestamp >= startedAt && timestamp <= endedAt);
+    const failures = this.failures.filter(({ timestamp }) => timestamp >= startedAt && timestamp <= endedAt);
+    const webSockets = this.webSockets.filter((socket) => (
+      socket.createdAt <= endedAt && socket.lastActivityAt >= startedAt
+    ));
+    const videoElements = await this.videoElementState(scope);
+    const technologies = new Set(responses.map(({ technology }) => technology));
+    if (videoElements.some(({ sourceType }) => sourceType === 'MediaStream')) technologies.add('WebRTC/MediaStream');
+    if (videoElements.some(({ sourceType }) => sourceType === 'MediaSource/blob')) technologies.add('Media Source Extensions');
+    if (webSockets.length) technologies.add('WebSocket activity observed');
+    const cardText = await scope.innerText().catch(() => '');
+    const report = {
+      event: {
+        label,
+        eventType: metadata?.eventType || null,
+        eventTag: metadata?.eventTag || null,
+        cardHeading: cardText.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null,
+      },
+      capture: {
+        startedAt: new Date(startedAt).toISOString(),
+        endedAt: new Date(endedAt).toISOString(),
+        durationMs: endedAt - startedAt,
+      },
+      playback: {
+        detectedTechnologies: [...technologies],
+        videoElements,
+        mediaResponses: responses,
+        failedMediaRequests: failures,
+        webSockets,
+      },
+      note: 'Technology is inferred from browser-visible requests, response content types, video state, and WebSocket activity. Query strings and credentials are removed.',
+    };
+    await test.info().attach(`Playback Network - ${label}`, {
+      body: Buffer.from(JSON.stringify(report, null, 2)),
+      contentType: 'application/json',
+    });
+    console.log(`[L1] Playback network report attached for ${label}: ${[...technologies].join(', ') || 'no browser-visible media transport identified'}.`);
+    return report;
+  }
+}
+
 const ICON_PATHS = {
   live: 'M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5M12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5m0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3',
   play: 'M8 5v14l11-7z',
@@ -379,7 +560,7 @@ class HealingManager {
 // Handles both standalone cards and Site Group drawers. The configured action
 // mode is passed into this object so the same workflow can terminate or escalate.
 class SiteGroupingPage {
-  constructor(page, resilience = {}, reporting = {}, metadataTracker = null) {
+  constructor(page, resilience = {}, reporting = {}, metadataTracker = null, playbackMonitor = null) {
     this.page = page;
     this.resilience = {
       autoHealElements: resilience.autoHealElements !== false,
@@ -390,12 +571,14 @@ class SiteGroupingPage {
       attachSiteInfoScreenshots: reporting.siteInfoScreenshots !== false,
       attachLiveViewScreenshots: reporting.liveViewScreenshots !== false,
       attachFullRunVideo: reporting.fullRunVideo !== false,
+      attachPlaybackNetworkDiagnostics: reporting.playbackNetworkDiagnostics !== false,
     };
     this.healer = new HealingManager(page, {
       enabled: this.resilience.autoHealElements,
       maxAttempts: 2,
     });
     this.metadataTracker = metadataTracker;
+    this.playbackMonitor = playbackMonitor;
     this.parentCard = null;
     this.badge = null;
     this.drawer = null;
@@ -629,9 +812,20 @@ class SiteGroupingPage {
     }
     await expect(play).toBeVisible({ timeout: 15000 });
     await expect(play).toBeEnabled({ timeout: 30000 });
+    const playbackStartedAt = Date.now();
     await play.click();
     await expect(pause).toBeVisible({ timeout: 15000 });
     console.log(`[L1] Play clicked and Pause state confirmed for ${label}.`);
+    if (this.reporting.attachPlaybackNetworkDiagnostics && this.playbackMonitor) {
+      await this.page.waitForTimeout(1200);
+      await this.playbackMonitor.attachEventReport(
+        this.parentCard,
+        label,
+        metadata,
+        playbackStartedAt,
+        Date.now(),
+      );
+    }
 
     const replayIcon = this.parentCard.locator(`button:has(svg path[d="${ICON_PATHS.replay}"])`);
     const replay = this.resilience.autoHealElements
@@ -1034,7 +1228,14 @@ test('L1 configured event action, playback, Live View, and Site Grouping workflo
   const resilienceConfig = executionConfig.resilience || {};
   const reportingConfig = executionConfig.reports || {};
   const metadataTracker = new EventMetadataTracker(page);
-  const l1 = new SiteGroupingPage(page, resilienceConfig, reportingConfig, metadataTracker);
+  const playbackMonitor = new PlaybackNetworkMonitor(page);
+  const l1 = new SiteGroupingPage(
+    page,
+    resilienceConfig,
+    reportingConfig,
+    metadataTracker,
+    playbackMonitor,
+  );
   const eventAction = String(executionConfig.eventAction || '').trim().toLowerCase();
   if (!['terminate', 'escalate', 'rule-based'].includes(eventAction)) {
     throw new Error('execution.config.json eventAction must be "terminate", "escalate", or "rule-based".');

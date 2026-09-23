@@ -15,6 +15,8 @@ Set the URL and true/false execution options in the ignored `execution.config.js
 
 The workflow logs in, accepts instructions when shown, waits five seconds for queue population, processes grouped and standalone events, applies the configured action to Site Group children using the live drawer count, acts on the parent, and continues scanning. Missing event choices are reported immediately so they do not add a 15-second delay to every action.
 
+When `reports.playbackNetworkDiagnostics` is `true`, every Play action adds a sanitized JSON attachment to the HTML report. It includes Event Type/Tag, card heading, detected video transport, media response status and content type, exposed server headers, failed media requests, WebSocket activity, and `<video>` state. URL credentials, query strings, and fragments are removed.
+
 ## Event action configuration
 
 `execution.config.json` controls the URL, event action, resilience, and report generation for the entire run. Set `eventAction` to `terminate`, `escalate`, or `rule-based`. Rule-based mode logs Event Type, escalates configured Event Tag matches, and terminates everything else. The file remains local and is ignored by Git because it may contain credentials.
@@ -48,6 +50,7 @@ The workflow logs in, accepts instructions when shown, waits five seconds for qu
     "trace": true,
     "screenshot": true,
     "video": true,
+    "playbackNetworkDiagnostics": true,
     "siteInfoScreenshots": true,
     "liveViewScreenshots": true,
     "fullRunVideo": true
