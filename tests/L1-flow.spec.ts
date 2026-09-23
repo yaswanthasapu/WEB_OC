@@ -741,7 +741,7 @@ class SiteGroupingPage {
       try {
         this.lastEventMetadata = await this.healer.run(
           `Play and Replay - ${label}`,
-          () => this.checkPlayAndReplay(label),
+          () => this.checkPlayAndReplay(label, true),
         );
       } catch (error) {
         failures.push(`Play/Replay: ${error.message}`);
@@ -777,7 +777,7 @@ class SiteGroupingPage {
     const failures = [];
     try {
       try {
-        await this.healer.run(`Play and Replay - ${label}`, () => this.checkPlayAndReplay(label));
+        await this.healer.run(`Play and Replay - ${label}`, () => this.checkPlayAndReplay(label, false));
       } catch (error) {
         failures.push(`Play/Replay: ${error.message}`);
       }
@@ -792,7 +792,7 @@ class SiteGroupingPage {
     if (failures.length) throw new Error(failures.join('\n'));
   }
 
-  async checkPlayAndReplay(label = 'selected event') {
+  async checkPlayAndReplay(label = 'selected event', attachPlaybackNetwork = false) {
     let metadata = null;
     await this.clickInfoControl('Event Info', label, false, async () => {
       metadata = await this.readEventMetadata(this.parentCard, label);
@@ -816,7 +816,7 @@ class SiteGroupingPage {
     await play.click();
     await expect(pause).toBeVisible({ timeout: 15000 });
     console.log(`[L1] Play clicked and Pause state confirmed for ${label}.`);
-    if (this.reporting.attachPlaybackNetworkDiagnostics && this.playbackMonitor) {
+    if (attachPlaybackNetwork && this.reporting.attachPlaybackNetworkDiagnostics && this.playbackMonitor) {
       await this.page.waitForTimeout(1200);
       await this.playbackMonitor.attachEventReport(
         this.parentCard,
