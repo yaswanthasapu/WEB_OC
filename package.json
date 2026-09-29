@@ -4,8 +4,8 @@
   "scripts": {
     "test": "playwright test",
     "report": "playwright show-report",
-    "test:functional": "playwright test",
-    "test:l1": "playwright test",
+    "test:functional": "playwright test tests/L1-flow.spec.ts",
+    "test:l1": "playwright test tests/L1-flow.spec.ts",
     "test:load": "playwright test tests/LoadTest.spec.ts",
     "report:load": "node scripts/generate-load-report.cjs",
     "report:l1": "node scripts/generate-l1-report.cjs"

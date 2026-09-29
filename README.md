@@ -1,15 +1,156 @@
-# Operator Client PWA — L1 Playwright automation
+# Operator Client PWA - L1 Playwright automation
 
-The entire executable workflow and its page-object classes are consolidated in `tests/L1-flow.spec.ts`. There are no additional test specs or separate page-object source files.
+The functional workflow and its page-object classes are consolidated in `tests/L1-flow.spec.ts`. The sequential load and performance workflow is in `tests/LoadTest.spec.ts`.
 
-## Run
+## Command reference
+
+Run all commands from the automation directory:
+
+```powershell
+cd "C:\Users\Yaswanth\Documents\Codex\2026-09-18\d-umar-operatorclientpwa\outputs\playwright-automation"
+```
+
+### First-time setup
 
 ```powershell
 npm ci
 npx playwright install chromium
-.\run-l1.ps1
-npm run report
 ```
+
+### Functional L1 execution
+
+The recommended command reads `execution.config.json` and requests every empty username, mobile number, or password in the terminal:
+
+```powershell
+.\run-l1.ps1
+```
+
+Override only the URL for one run:
+
+```powershell
+.\run-l1.ps1 -Url "https://uat1-oc.iviscloud.net/"
+```
+
+Run the functional spec directly when credentials already exist in `execution.config.json` or the `OC_USERNAME`, `OC_MOBILE_NUMBER`, and `OC_PASSWORD` environment variables:
+
+```powershell
+npm run test:l1
+```
+
+### Load and performance execution
+
+The recommended load command reads `loadtest.execution.config.json`, requests empty credentials in the terminal, uses one browser, and alternates escalation and termination:
+
+```powershell
+.\run-load-test.ps1
+```
+
+Override only the URL for one load run:
+
+```powershell
+.\run-load-test.ps1 -Url "https://uat1-oc.iviscloud.net/"
+```
+
+Run the load spec directly with the load configuration when credentials are already populated:
+
+```powershell
+$env:PW_EXECUTION_CONFIG = "loadtest.execution.config.json"
+$env:PW_LOAD_TEST = "1"
+npm run test:load
+Remove-Item Env:PW_EXECUTION_CONFIG, Env:PW_LOAD_TEST
+```
+
+### Generate and open reports
+
+Regenerate and open the customized functional L1 HTML/PDF report from the latest JSON result:
+
+```powershell
+npm run report:l1
+Start-Process ".\reports\l1-report\index.html"
+Start-Process ".\reports\l1-report\WEB_OC-L1-report.pdf"
+```
+
+Open the standard functional Playwright report with screenshots, video, trace, and attachments:
+
+```powershell
+npx playwright show-report playwright-report
+```
+
+Regenerate and open the customized load dashboard:
+
+```powershell
+npm run report:load
+Start-Process ".\reports\load-report\index.html"
+```
+
+Open the standard load-test Playwright report:
+
+```powershell
+npx playwright show-report playwright-report/load-test
+```
+
+Open the newest trace:
+
+```powershell
+$trace = Get-ChildItem ".\test-results" -Recurse -Filter "trace.zip" |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+npx playwright show-trace $trace.FullName
+```
+
+### Development and troubleshooting
+
+List every test that Playwright and VS Code Test Explorer should discover:
+
+```powershell
+npx playwright test --list
+```
+
+Run the functional workflow in Playwright debug mode:
+
+```powershell
+$env:PWDEBUG = "1"
+.\run-l1.ps1
+Remove-Item Env:PWDEBUG
+```
+
+Run the load workflow in Playwright debug mode:
+
+```powershell
+$env:PWDEBUG = "1"
+.\run-load-test.ps1
+Remove-Item Env:PWDEBUG
+```
+
+Run a syntax/type-loading check without executing UAT actions:
+
+```powershell
+node --check ".\scripts\generate-l1-report.cjs"
+node --check ".\scripts\generate-load-report.cjs"
+npx playwright test --list
+```
+
+### VS Code Test Explorer
+
+Open this exact automation folder in VS Code so the Playwright extension can find `playwright.config.js`:
+
+```powershell
+code "C:\Users\Yaswanth\Documents\Codex\2026-09-18\d-umar-operatorclientpwa\outputs\playwright-automation"
+```
+
+Then open **Testing** and click **Refresh Tests**. Both `L1-flow.spec.ts` and `LoadTest.spec.ts` are included in `testMatch`. Test Explorer does not provide the terminal credential prompts used by the PowerShell runners, so populate the corresponding JSON credential fields or provide the `OC_USERNAME`, `OC_MOBILE_NUMBER`, and `OC_PASSWORD` environment variables before launching VS Code.
+
+### Stop an active execution
+
+In the terminal running Playwright, press:
+
+```text
+Ctrl+C
+```
+
+If a previous report viewer is still running, focus its terminal and press `Ctrl+C` there as well.
+
+## Functional workflow
 
 Set the URL and true/false execution options in the ignored `execution.config.json`. Login values are optional in the file: leave any of them empty so `run-l1.ps1` asks for the username, mandatory mobile number, and hidden password in the terminal. The suite runs headed and maximized.
 
@@ -27,7 +168,7 @@ Run `./run-load-test.ps1` to execute `tests/LoadTest.spec.ts` with `loadtest.exe
 
 Set both `load.durationSeconds` and `load.maxEvents` to `0`, with `load.stopWhenQueueEmpty` set to `true`, to keep processing until all eight exact `No Event Available` markers are visible. A positive value enables that duration or event-count limit.
 
-When the exact empty marker is visible on all eight cards, the load workflow clicks the ToggleSwitch, opens Logout, confirms with `Yes`, and then finishes the browser session.
+When the exact empty marker is visible on all eight cards, the load workflow captures the final browser metrics, clicks the ToggleSwitch, opens Logout, confirms with `Yes`, and explicitly closes the browser context. Closing a long headed run can still leave the terminal active briefly while Playwright finalizes the configured WebM recording and trace. Set `reports.video` or `reports.trace` to `false` in `loadtest.execution.config.json` when those artifacts are not required and faster finalization is preferred.
 
 Queue selection uses a rotating cursor across all eight cards. After processing one slot, the next scan starts at the following slot, which prevents continuously populated top-row cards from blocking actions on the four lower cards.
 

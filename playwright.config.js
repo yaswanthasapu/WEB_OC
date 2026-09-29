@@ -36,7 +36,9 @@ const video = reports.video === false
     };
 module.exports = defineConfig({
   testDir: './tests',
-  testMatch: isLoadTest ? '**/LoadTest.spec.ts' : '**/L1-flow.spec.ts',
+  // Keep both specs discoverable in VS Code Test Explorer. The npm scripts
+  // select the intended spec explicitly for functional and load executions.
+  testMatch: ['**/L1-flow.spec.ts', '**/LoadTest.spec.ts'],
   timeout: 60000,
   expect: { timeout: 15000 },
   fullyParallel: false,
@@ -45,6 +47,12 @@ module.exports = defineConfig({
   workers: 1,
   reporter: reporters,
   outputDir: 'test-results',
+  projects: [
+    {
+      name: 'WEB_OC-L1',
+      use: { browserName: 'chromium' },
+    },
+  ],
   use: {
     baseURL,
     headless: executionConfig.browser?.headless === true,

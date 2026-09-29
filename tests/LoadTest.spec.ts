@@ -535,6 +535,12 @@ test('L1 single-browser load and performance workflow', async ({ page }, testInf
       }
     }
 
+    metrics.browserRuntime = await page.evaluate(() => ({
+      resourceCount: performance.getEntriesByType('resource').length,
+      usedJavaScriptHeapBytes: performance.memory?.usedJSHeapSize || null,
+      totalJavaScriptHeapBytes: performance.memory?.totalJSHeapSize || null,
+    })).catch(() => null);
+
     if (queueBecameEmpty) {
       await queue.logoutFromEmptyQueue();
     }
@@ -557,11 +563,11 @@ test('L1 single-browser load and performance workflow', async ({ page }, testInf
     metrics.throughputEventsPerMinute = metrics.actualDurationMs
       ? Number(((metrics.successfulEvents / metrics.actualDurationMs) * 60000).toFixed(2))
       : 0;
-    metrics.browserRuntime = await page.evaluate(() => ({
-      resourceCount: performance.getEntriesByType('resource').length,
-      usedJavaScriptHeapBytes: performance.memory?.usedJSHeapSize || null,
-      totalJavaScriptHeapBytes: performance.memory?.totalJSHeapSize || null,
-    })).catch(() => null);
+    // Close the visible browser as soon as logout and browser metrics finish.
+    // Context closure also finalizes the configured video and trace before the
+    // JSON summary and report attachments are written.
+    await page.context().close();
+    console.log('[LOAD][BROWSER] Browser session closed. Video and trace finalization completed.');
 
     const summaryPath = testInfo.outputPath('load-performance-summary-single-browser.json');
     fs.writeFileSync(summaryPath, JSON.stringify(metrics, null, 2));
