@@ -4,3 +4,4 @@ playwright-report/
 reports/
 credentials.local.json
 execution.config.json
+loadtest.execution.config.json

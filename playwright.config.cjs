@@ -1,21 +1,28 @@
 const { defineConfig } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
-const executionConfigPath = path.resolve(__dirname, 'execution.config.json');
+const executionConfigFile = process.env.PW_EXECUTION_CONFIG || 'execution.config.json';
+const executionConfigPath = path.resolve(__dirname, executionConfigFile);
 const executionConfig = fs.existsSync(executionConfigPath)
   ? JSON.parse(fs.readFileSync(executionConfigPath, 'utf8').replace(/^\uFEFF/, ''))
   : {};
 const reports = executionConfig.reports || {};
+const isLoadTest = process.env.PW_LOAD_TEST === '1';
 const reporters = [['list']];
 if (reports.html !== false) {
   reporters.push(['html', {
     open: 'never',
-    outputFolder: 'playwright-report',
+    outputFolder: reports.htmlOutputFolder || (isLoadTest ? 'playwright-report/load-test' : 'playwright-report'),
   }]);
 }
 if (reports.junit !== false) {
   reporters.push(['junit', {
-    outputFile: 'reports/junit.xml',
+    outputFile: reports.junitOutputFile || (isLoadTest ? 'reports/load-test-junit.xml' : 'reports/junit.xml'),
+  }]);
+}
+if (!isLoadTest && reports.crmDashboard !== false) {
+  reporters.push(['json', {
+    outputFile: reports.jsonOutputFile || 'reports/l1-results.json',
   }]);
 }
 const baseURL = process.env.BASE_URL
@@ -29,7 +36,7 @@ const video = reports.video === false
     };
 module.exports = defineConfig({
   testDir: './tests',
-  testMatch: '**/L1-flow.spec.ts',
+  testMatch: isLoadTest ? '**/LoadTest.spec.ts' : '**/L1-flow.spec.ts',
   timeout: 60000,
   expect: { timeout: 15000 },
   fullyParallel: false,
@@ -40,7 +47,7 @@ module.exports = defineConfig({
   outputDir: 'test-results',
   use: {
     baseURL,
-    headless: false,
+    headless: executionConfig.browser?.headless === true,
     viewport: null,
     launchOptions: { args: ['--start-maximized'] },
     serviceWorkers: 'block',

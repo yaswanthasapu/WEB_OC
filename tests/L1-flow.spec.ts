@@ -183,6 +183,7 @@ class EventMetadataTracker {
         ? eventTimeParts.slice(-3).join(':')
         : '';
       this.records.push({
+        eventId: String(data.eventId || data.eventID || data.extras?.eventId || data.extras?.eventID || '').trim() || null,
         eventType: data.currentEventType || data.sourceEventType || data.extras?.eventType || null,
         eventTag: data.currentEventTag || data.sourceEventTag || data.extras?.eventTag || null,
         siteName: String(data.siteName || data.extras?.siteName || '').trim(),
@@ -213,17 +214,17 @@ class EventMetadataTracker {
       const clockMatchesScope = record.eventClock
         && (visibleClock === record.eventClock || visibleText.includes(record.eventClock));
       if (siteMatchesScope && (!record.eventClock || clockMatchesScope)) {
-        return { eventType: record.eventType, eventTag: record.eventTag };
+        return { eventId: record.eventId, eventType: record.eventType, eventTag: record.eventTag };
       }
       if (clockMatchesScope) clockMatches.push(record);
       if (siteMatchesScope) siteMatches.push(record);
     }
     // A clock or site-only fallback is safe only when it identifies one record.
     if (clockMatches.length === 1) {
-      return { eventType: clockMatches[0].eventType, eventTag: clockMatches[0].eventTag };
+      return { eventId: clockMatches[0].eventId, eventType: clockMatches[0].eventType, eventTag: clockMatches[0].eventTag };
     }
     if (siteMatches.length === 1) {
-      return { eventType: siteMatches[0].eventType, eventTag: siteMatches[0].eventTag };
+      return { eventId: siteMatches[0].eventId, eventType: siteMatches[0].eventType, eventTag: siteMatches[0].eventTag };
     }
     return null;
   }
@@ -384,6 +385,7 @@ class PlaybackNetworkMonitor {
     const report = {
       event: {
         label,
+        eventId: metadata?.eventId || null,
         eventType: metadata?.eventType || null,
         eventTag: metadata?.eventTag || null,
         cardHeading: cardText.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null,
@@ -581,6 +583,8 @@ class SiteGroupingPage {
     this.childCount = 0;
     this.lastEventMetadata = null;
     this.pendingPlaybackNetworkReport = null;
+    this.seenEventIds = new Map();
+    this.duplicateEvents = [];
   }
 
   actionButton(scope, tag) {
@@ -870,6 +874,7 @@ class SiteGroupingPage {
     const configuredTags = Object.values(this.ruleBasedRules || DEFAULT_ESCALATION_RULES).flat();
     const visibleDialog = this.page.locator('[role="dialog"]:visible').last();
     const metadataScope = await visibleDialog.isVisible().catch(() => false) ? visibleDialog : scope;
+    let eventId = await this.readLabeledValue(metadataScope, 'Event ID');
     let eventType = await this.readLabeledValue(metadataScope, 'Event Type');
     let eventTag = await this.readLabeledValue(metadataScope, 'Event Tag');
     eventType ||= await this.findVisibleExactText(metadataScope, configuredTypes);
@@ -883,14 +888,96 @@ class SiteGroupingPage {
     // final scope after preferring the card/drawer itself.
     eventType ||= await this.findVisibleExactText(this.page, configuredTypes);
     eventTag ||= await this.findVisibleExactText(this.page, configuredTags);
-    if ((!eventType || !eventTag) && this.metadataTracker) {
+    if ((!eventId || !eventType || !eventTag) && this.metadataTracker) {
       const tracked = await this.metadataTracker.findForScope(scope);
+      eventId ||= tracked?.eventId || null;
       eventType ||= tracked?.eventType || null;
       eventTag ||= tracked?.eventTag || null;
     }
-    const metadata = { eventType, eventTag };
-    console.log(`[L1] ${label} metadata: Event Type="${eventType || 'unrecognized/missing'}", Event Tag="${eventTag || 'unrecognized/missing'}".`);
+    const metadata = { eventId, eventType, eventTag };
+    console.log(`[L1] ${label} metadata: Event ID="${eventId || 'unrecognized/missing'}", Event Type="${eventType || 'unrecognized/missing'}", Event Tag="${eventTag || 'unrecognized/missing'}".`);
+    await this.reportDuplicateEventId(metadata, label);
     return metadata;
+  }
+
+  async reportDuplicateEventId(metadata, label) {
+    const eventId = String(metadata?.eventId || '').trim();
+    if (!eventId) return;
+
+    const occurrence = {
+      label,
+      eventId,
+      eventType: metadata.eventType || null,
+      eventTag: metadata.eventTag || null,
+      detectedAt: new Date().toISOString(),
+    };
+    const firstOccurrence = this.seenEventIds.get(eventId);
+    if (!firstOccurrence) {
+      this.seenEventIds.set(eventId, { ...occurrence, duplicateCount: 0 });
+      return;
+    }
+
+    firstOccurrence.duplicateCount += 1;
+    const duplicateNumber = firstOccurrence.duplicateCount;
+    const safeEventId = eventId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const duplicateReport = {
+      status: 'DUPLICATE_EVENT_ID',
+      eventId,
+      duplicateNumber,
+      firstOccurrence: {
+        label: firstOccurrence.label,
+        eventType: firstOccurrence.eventType,
+        eventTag: firstOccurrence.eventTag,
+        detectedAt: firstOccurrence.detectedAt,
+      },
+      repeatedOccurrence: occurrence,
+    };
+
+    const timestamp = Date.now();
+    const reportPath = test.info().outputPath(`duplicate-event-id-${safeEventId}-${duplicateNumber}-${timestamp}.json`);
+    fs.writeFileSync(reportPath, JSON.stringify(duplicateReport, null, 2));
+    const screenshotPath = test.info().outputPath(`duplicate-event-id-${safeEventId}-${duplicateNumber}-${timestamp}.png`);
+    const screenshotSaved = await this.page.screenshot({ path: screenshotPath, fullPage: true })
+      .then(() => true)
+      .catch(() => false);
+    this.duplicateEvents.push({
+      ...duplicateReport,
+      reportPath,
+      screenshotPath: screenshotSaved ? screenshotPath : null,
+    });
+    console.warn(`[L1] Duplicate Event ID detected: ${eventId}. It will be shown in the Duplicate Events Summary report section.`);
+  }
+
+  async attachDuplicateEventsSummary() {
+    await test.step(`Duplicate Events Summary (${this.duplicateEvents.length})`, async () => {
+      const summary = {
+        status: this.duplicateEvents.length ? 'DUPLICATES_FOUND' : 'NO_DUPLICATES_FOUND',
+        duplicateCount: this.duplicateEvents.length,
+        uniqueDuplicateEventIds: [...new Set(this.duplicateEvents.map(({ eventId }) => eventId))],
+        duplicates: this.duplicateEvents.map(({ reportPath, screenshotPath, ...duplicate }) => duplicate),
+      };
+      const summaryPath = test.info().outputPath(`duplicate-events-summary-${Date.now()}.json`);
+      fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
+      await test.info().attach('Duplicate Events Summary', {
+        path: summaryPath,
+        contentType: 'application/json',
+      });
+
+      for (const duplicate of this.duplicateEvents) {
+        const attachmentPrefix = `Duplicate Event ID ${duplicate.eventId} - occurrence ${duplicate.duplicateNumber}`;
+        await test.info().attach(`${attachmentPrefix} - Details`, {
+          path: duplicate.reportPath,
+          contentType: 'application/json',
+        });
+        if (duplicate.screenshotPath) {
+          await test.info().attach(`${attachmentPrefix} - Screenshot`, {
+            path: duplicate.screenshotPath,
+            contentType: 'image/png',
+          });
+        }
+      }
+    });
+    console.log(`[L1] Duplicate Events Summary attached with ${this.duplicateEvents.length} duplicate occurrence(s).`);
   }
 
   configureRuleBasedDecision(rules) {
@@ -1162,23 +1249,33 @@ class SiteGroupingPage {
       || cameraApiUrl.searchParams.get('unitId')
       || 'unknown-unit';
     const safeUnitId = unitId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const eventId = this.pendingPlaybackNetworkReport?.event?.eventId
+      || this.lastEventMetadata?.eventId
+      || null;
+    const safeEventId = eventId ? eventId.replace(/[^a-zA-Z0-9_-]/g, '_') : null;
+    const reportIdentity = eventId
+      ? `Event ID ${eventId} - Unit ID ${unitId}`
+      : `Unit ID ${unitId}`;
+    const fileIdentity = safeEventId
+      ? `event-${safeEventId}-unit-${safeUnitId}`
+      : `unit-${safeUnitId}`;
     if (siteInfoScreenshot) {
-      const siteInfoScreenshotPath = test.info().outputPath(`site-info-unit-${safeUnitId}-${Date.now()}.png`);
+      const siteInfoScreenshotPath = test.info().outputPath(`site-info-${fileIdentity}-${Date.now()}.png`);
       fs.writeFileSync(siteInfoScreenshotPath, siteInfoScreenshot);
-      await test.info().attach(`Unit ID ${unitId} - Site Info Screenshot`, {
+      await test.info().attach(`${reportIdentity} - Site Info Screenshot`, {
         path: siteInfoScreenshotPath,
         contentType: 'image/png',
       });
-      console.log(`[L1] Site Info screenshot attached to the report for Unit ID ${unitId}: ${path.basename(siteInfoScreenshotPath)}.`);
+      console.log(`[L1] Site Info screenshot attached to the report for ${reportIdentity}: ${path.basename(siteInfoScreenshotPath)}.`);
     }
     if (this.reporting.attachLiveViewScreenshots) {
-      const screenshotPath = test.info().outputPath(`live-view-unit-${safeUnitId}-${Date.now()}.png`);
+      const screenshotPath = test.info().outputPath(`live-view-${fileIdentity}-${Date.now()}.png`);
       await popup.screenshot({ path: screenshotPath, fullPage: true });
-      await test.info().attach(`Unit ID ${unitId} - Live View Screenshot`, {
+      await test.info().attach(`${reportIdentity} - Live View Screenshot`, {
         path: screenshotPath,
         contentType: 'image/png',
       });
-      console.log(`[L1] Live View screenshot attached to the report for Unit ID ${unitId}: ${path.basename(screenshotPath)}.`);
+      console.log(`[L1] Live View screenshot attached to the report for ${reportIdentity}: ${path.basename(screenshotPath)}.`);
     }
     expect(cameraResponse.ok(), `Camera API returned HTTP ${cameraResponse.status()}`).toBeTruthy();
 
@@ -1190,19 +1287,20 @@ class SiteGroupingPage {
     const cameraLabel = `${firstCamera.name} - ${firstCamera.cameraId}`;
     await expect(popup.getByText(cameraLabel, { exact: true })).toBeVisible({ timeout: 30000 });
     if (this.pendingPlaybackNetworkReport) {
+      this.pendingPlaybackNetworkReport.event.eventId = eventId;
       this.pendingPlaybackNetworkReport.event.unitId = unitId;
       this.pendingPlaybackNetworkReport.event.cameraName = firstCamera.name || null;
       this.pendingPlaybackNetworkReport.event.cameraId = firstCamera.cameraId || null;
-      const playbackNetworkPath = test.info().outputPath(`playback-network-unit-${safeUnitId}-${Date.now()}.json`);
+      const playbackNetworkPath = test.info().outputPath(`playback-network-${fileIdentity}-${Date.now()}.json`);
       fs.writeFileSync(
         playbackNetworkPath,
         JSON.stringify(this.pendingPlaybackNetworkReport, null, 2),
       );
-      await test.info().attach(`Unit ID ${unitId} - Playback Network Diagnostics`, {
+      await test.info().attach(`${reportIdentity} - Playback Network Diagnostics`, {
         path: playbackNetworkPath,
         contentType: 'application/json',
       });
-      console.log(`[L1] Playback network diagnostics attached alongside event screenshots for Unit ID ${unitId}: ${path.basename(playbackNetworkPath)}.`);
+      console.log(`[L1] Playback network diagnostics attached alongside event screenshots for ${reportIdentity}: ${path.basename(playbackNetworkPath)}.`);
       this.pendingPlaybackNetworkReport = null;
     }
     console.log(`[L1] Live View camera confirmed for ${label}: ${cameraLabel}.`);
@@ -1401,6 +1499,8 @@ test('L1 configured event action, playback, Live View, and Site Grouping workflo
       }
     }
   });
+
+  await l1.attachDuplicateEventsSummary();
 
   if (loggedOut || reachedEventLimit) return;
   if (deferredFailures.length) {

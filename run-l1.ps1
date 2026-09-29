@@ -69,6 +69,16 @@ try {
     }
     Write-Output '[L1] JUnit stdout removed; HTML playback diagnostics remain available.'
   }
+  if ($executionConfig.reports.crmDashboard -ne $false) {
+    & npm.cmd run report:l1
+    $reportExitCode = $LASTEXITCODE
+    if ($testExitCode -eq 0 -and $reportExitCode -ne 0) {
+      $testExitCode = $reportExitCode
+    }
+    if ($reportExitCode -eq 0) {
+      Write-Output "[L1] CRM dashboard: $(Join-Path $PSScriptRoot $executionConfig.reports.crmOutputFile)"
+    }
+  }
 } finally {
   if ($pointer) {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
